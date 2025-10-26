@@ -16,8 +16,8 @@ const Sidebar = ({ activeSection, onSectionChange }) => {
   return (
     <div id="sidebar-wrapper">
       <div>
-        {/* Utilize o caminho local 'public/src/img/logo.jpg' */}
-        <img className="imglogo" src="/src/img/logo.jpg" alt="Logo" />
+        {/* Utilize o caminho local 'public/src/img/logo.png' */}
+        <img className="imglogo" src="/src/img/logo.png" alt="Logo" />
       </div>
       <div className="sidebar-heading text-center p-3">
         <i className="fas fa-book-open-reader me-2"></i> 
