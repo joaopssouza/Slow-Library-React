@@ -9,7 +9,7 @@ export default function Index() {
     <div dangerouslySetInnerHTML={{ __html: `<div class="d-flex" id="wrapper">
         <div id="sidebar-wrapper">
             <div>
-                <img class="imglogo" src="src/img/logo.png" alt="" sizes="" srcset="">
+                <img class="imglogo" src="/img/logo.png" alt="" sizes="" srcset="">
                 
             </div>
             <div class="sidebar-heading text-center p-3">
