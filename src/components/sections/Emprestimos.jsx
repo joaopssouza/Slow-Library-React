@@ -1,99 +1,218 @@
 import React, { useEffect, useState } from 'react';
+import { supabase } from '../../supabaseClient';
 
-const LOANS_KEY = 'slowlibrary_loans_v1';
-
-function loadLoans() {
+async function loadLoans() {
   try {
-    const raw = localStorage.getItem(LOANS_KEY);
-    if (!raw) {
-      return [
-        { id: 'E001', material: 'Aprenda Java', usuario: 'Ana Costa', dataEmprestimo: '2025-06-20', dataDevolucaoPrev: '2025-07-05', status: 'No prazo' },
-        { id: 'E002', material: 'C++ Essencial', usuario: 'Pedro Santos', dataEmprestimo: '2025-06-10', dataDevolucaoPrev: '2025-06-24', status: 'Atrasado' }
-      ];
-    }
-    return JSON.parse(raw);
+    const { data: loans, error } = await supabase
+      .from('emprestimos')
+      .select(`
+        *,
+        item:item_id(
+          id,
+          obra:obra_id(
+            id,
+            titulo
+          )
+        ),
+        usuario:usuario_id(
+          id,
+          nome_completo
+        )
+      `);
+
+    if (error) throw error;
+    return loans || [];
   } catch (e) {
     console.error('Erro ao carregar empréstimos:', e);
     return [];
   }
 }
 
-function saveLoans(list) {
-  localStorage.setItem(LOANS_KEY, JSON.stringify(list));
+async function loadBooks() {
+  try {
+    const { data: items, error } = await supabase
+      .from('itens_acervo')
+      .select(`
+        id,
+        codigo_barras_interno,
+        obra:obra_id(
+          id,
+          titulo
+        )
+      `)
+      .eq('status', 'Disponível')
+      .order('codigo_barras_interno');
+    
+    if (error) throw error;
+    return items || [];
+  } catch (e) {
+    console.error('Erro ao carregar itens do acervo:', e);
+    return [];
+  }
 }
 
-function nextLoanId(list) {
-  let max = 0;
-  list.forEach(l => {
-    const m = l.id && l.id.match(/E(\d+)/);
-    if (m && m[1]) max = Math.max(max, Number(m[1]));
-  });
-  return 'E' + String(max + 1).padStart(3, '0');
+async function loadUsers() {
+  try {
+    const { data: users, error } = await supabase
+      .from('usuarios')
+      .select('id, nome_completo')
+      .order('nome_completo');
+    
+    if (error) throw error;
+    return users || [];
+  } catch (e) {
+    console.error('Erro ao carregar usuários:', e);
+    return [];
+  }
+}
+
+async function saveEmprestimo(emprestimo) {
+  const { data, error } = await supabase
+    .from('emprestimos')
+    .upsert(emprestimo)
+    .select();
+  
+  if (error) throw error;
+  return data[0];
 }
 
 const Emprestimos = () => {
-  const [loans, setLoans] = useState(() => loadLoans());
+  const [loans, setLoans] = useState([]);
+  const [books, setBooks] = useState([]);
+  const [users, setUsers] = useState([]);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingIndex, setEditingIndex] = useState(null);
-  const [form, setForm] = useState({ id: '', material: '', usuario: '', dataEmprestimo: '', dataDevolucaoPrev: '', status: 'No prazo' });
+  const [editingId, setEditingId] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({
+    id: null,
+    item_id: '',
+    usuario_id: '',
+    data_emprestimo: '',
+    data_devolucao_prevista: '',
+    status: 'Ativo'
+  });
 
   useEffect(() => {
-    saveLoans(loans);
-  }, [loans]);
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        const [loansData, booksData, usersData] = await Promise.all([
+          loadLoans(),
+          loadBooks(),
+          loadUsers()
+        ]);
+        setLoans(loansData);
+        setBooks(booksData);
+        setUsers(usersData);
+      } catch (error) {
+        console.error('Erro ao carregar dados:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   function openNew() {
-    setEditingIndex(null);
-    setForm({ id: nextLoanId(loans), material: '', usuario: '', dataEmprestimo: new Date().toISOString().slice(0,10), dataDevolucaoPrev: '', status: 'No prazo' });
+    setEditingId(null);
+    setForm({
+      id: null,
+      livro_id: '',
+      usuario_id: '',
+      data_emprestimo: new Date().toISOString().slice(0,10),
+      data_devolucao_prev: '',
+      status: 'No prazo'
+    });
     setIsModalOpen(true);
   }
 
-  function openEdit(idx) {
-    const l = loans[idx];
-    if (!l) return;
-    setEditingIndex(idx);
-    setForm({ ...l });
+  function openEdit(id) {
+    const loan = loans.find(l => l.id === id);
+    if (!loan) return;
+    setEditingId(id);
+    setForm({
+      id: loan.id,
+      livro_id: loan.livro_id,
+      usuario_id: loan.usuario_id,
+      data_emprestimo: loan.data_emprestimo,
+      data_devolucao_prev: loan.data_devolucao_prev,
+      status: loan.status
+    });
     setIsModalOpen(true);
   }
 
-  function saveForm() {
-    // compute status by dates if not 'Devolvido'
-    const due = form.dataDevolucaoPrev ? new Date(form.dataDevolucaoPrev) : null;
-    const today = new Date();
-    if (due && form.status !== 'Devolvido') {
-      due.setHours(0,0,0,0);
-      today.setHours(0,0,0,0);
-      if (due < today) form.status = 'Atrasado';
-      else form.status = 'No prazo';
+  async function saveForm() {
+    try {
+      // compute status by dates if not 'Devolvido'
+      const due = form.data_devolucao_prev ? new Date(form.data_devolucao_prev) : null;
+      const today = new Date();
+      if (due && form.status !== 'Devolvido') {
+        due.setHours(0,0,0,0);
+        today.setHours(0,0,0,0);
+        if (due < today) form.status = 'Atrasado';
+        else form.status = 'No prazo';
+      }
+
+      const savedLoan = await saveEmprestimo(form);
+      
+      if (editingId) {
+        setLoans(prev => prev.map(l => l.id === editingId ? savedLoan : l));
+      } else {
+        setLoans(prev => [...prev, savedLoan]);
+      }
+      
+      setIsModalOpen(false);
+    } catch (error) {
+      console.error('Erro ao salvar empréstimo:', error);
+      alert('Erro ao salvar empréstimo. Verifique o console para mais detalhes.');
     }
-    if (editingIndex !== null) {
-      const copy = [...loans];
-      copy[editingIndex] = { ...form };
-      setLoans(copy);
-    } else {
-      setLoans(prev => [...prev, { ...form }]);
-    }
-    setIsModalOpen(false);
   }
 
-  function registerReturn(idx) {
-    const copy = [...loans];
-    copy[idx].status = 'Devolvido';
-    // opcional: gravar data de devolução real
-    setLoans(copy);
+  async function registerReturn(id) {
+    try {
+      const { data, error } = await supabase
+        .from('emprestimos')
+        .update({ status: 'Devolvido', data_devolucao: new Date().toISOString() })
+        .eq('id', id)
+        .select();
+      
+      if (error) throw error;
+      
+      setLoans(prev => prev.map(l => l.id === id ? data[0] : l));
+    } catch (error) {
+      console.error('Erro ao registrar devolução:', error);
+      alert('Erro ao registrar devolução. Verifique o console para mais detalhes.');
+    }
   }
 
-  function deleteLoan(idx) {
+  async function deleteLoan(id) {
     if (!confirm('Deseja excluir este empréstimo?')) return;
-    setLoans(prev => prev.filter((_,i) => i !== idx));
+    try {
+      const { error } = await supabase
+        .from('emprestimos')
+        .delete()
+        .eq('id', id);
+      
+      if (error) throw error;
+      
+      setLoans(prev => prev.filter(l => l.id !== id));
+    } catch (error) {
+      console.error('Erro ao excluir empréstimo:', error);
+      alert('Erro ao excluir empréstimo. Verifique o console para mais detalhes.');
+    }
   }
 
   function filteredLoans() {
     const q = search.trim().toLowerCase();
     return loans.filter(l => {
       if (q) {
-        const hay = (l.id + ' ' + l.usuario + ' ' + l.material).toLowerCase();
+        const hay = [
+          l.id,
+          l.livro?.titulo || '',
+          l.usuario?.nome || ''
+        ].join(' ').toLowerCase();
         if (!hay.includes(q)) return false;
       }
       if (filter === 'all') return true;
